@@ -1,4 +1,5 @@
 ## Development
+Contributions and improvements are welcome!
 # RAG Debugger v0.1
 
 A minimal RAG (Retrieval-Augmented Generation) debugger that shows how retrieved documents influence generated answers. This tool helps you understand which parts of your answer are supported by the source documents and which are not.
