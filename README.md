@@ -1,193 +1,86 @@
-## Development
-Contributions and improvements are welcome!
-# RAG Debugger v0.1
+# RAG Debugger
 
-A minimal RAG (Retrieval-Augmented Generation) debugger that shows how retrieved documents influence generated answers. This tool helps you understand which parts of your answer are supported by the source documents and which are not.
-
-## Features
-
-- **Document Upload**: Upload PDF or TXT files
-- **Semantic Search**: Uses FAISS for efficient vector similarity search
-- **Answer Generation**: Generates answers using OpenAI's Chat Completion API
-- **Evidence Alignment**: Shows which chunks support each sentence in the answer
-- **Unsupported Detection**: Flags sentences that have no supporting evidence
-
-## Architecture
-
-```
-┌─────────────┐
-│   FastAPI   │
-│   Backend   │
-└──────┬──────┘
-       │
-       ├─── Upload → Load → Chunk → Embed → Store (FAISS)
-       │
-       └─── Ask → Retrieve → Generate → Debug → Return
-```
-
-### Components
-
-- **loader.py**: Loads PDF/TXT files
-- **chunker.py**: Splits documents into overlapping chunks
-- **embeddings.py**: Generates embeddings using OpenAI API
-- **retriever.py**: FAISS-based vector store for similarity search
-- **generator.py**: Generates answers using OpenAI Chat Completion
-- **debugger.py**: Analyzes evidence alignment between answer sentences and chunks
-
-## Setup
-
-### Prerequisites
-
-- Python 3.8+
-- OpenAI API key
-
-### Installation
-
-1. Clone or download this repository
-
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-3. Set your OpenAI API key:
-```bash
-# Windows (PowerShell)
-$env:OPENAI_API_KEY="your-api-key-here"
-
-# Linux/Mac
-export OPENAI_API_KEY="your-api-key-here"
-```
-
-## Usage
-
-### Start the Server
+**v0.2 — root-cause debugging.** Give it one failed RAG trace. It tells you which claims failed, where the correct evidence was, which stage likely failed, and one thing to test next.
 
 ```bash
-uvicorn app:app --reload
+rag-debugger analyze trace.json
+rag-debugger compare before.json after.json
 ```
 
-The API will be available at `http://localhost:8000`
+No web page required.
 
-### API Endpoints
+## Trace
 
-#### 1. Upload Documents
+Every adapter and the API consume the same schema:
 
-```bash
-curl -X POST "http://localhost:8000/upload" \
-  -F "files=@document1.pdf" \
-  -F "files=@document2.txt"
-```
-
-Response:
 ```json
 {
-  "document_ids": ["uuid1", "uuid2"]
+  "question": "...",
+  "answer": "...",
+  "retrieved_chunks": [{"id": "r1", "text": "..."}],
+  "corpus_chunks": [{"id": "c47", "text": "..."}],
+  "metadata": {"retriever": "faiss", "top_k": 5, "model": "gpt-4o-mini"}
 }
 ```
 
-#### 2. Ask a Question
+```python
+from rag_debugger.integrations.langchain import trace
+from rag.diagnose import diagnose
 
-```bash
-curl -X POST "http://localhost:8000/ask" \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What is the main topic?"}'
+report = diagnose(trace(query, langchain_result, corpus=nodes, retriever="faiss", top_k=5))
+print(report.format())
 ```
 
-Response:
+Each claim:
+
 ```json
 {
-  "answer": "The main topic is...",
-  "retrieved_chunks": [
-    {
-      "doc_id": "uuid1",
-      "chunk_id": "uuid1_chunk_0",
-      "text": "Chunk text...",
-      "score": -0.123
-    }
-  ],
-  "evidence_alignment": [
-    {
-      "answer_sentence": "The main topic is...",
-      "supporting_chunks": ["uuid1_chunk_0"]
-    }
-  ],
-  "unsupported_sentences": []
+  "claim": "...",
+  "label": "retrieval_miss",
+  "confidence": 0.8,
+  "best_retrieved_chunk": "r3",
+  "best_corpus_chunk": "c47",
+  "evidence": "...",
+  "reason": "Relevant evidence exists in corpus but was not retrieved."
 }
 ```
 
-#### 3. Health Check
+Then a pipeline summary: how many claims are supported, how many misses, the primary suspected stage, and one next test. `confidence` is a heuristic, not a calibrated probability.
+
+## Install
 
 ```bash
-curl http://localhost:8000/health
+pip install git+https://github.com/Elyasirankhah/RAG_Debugger.git
+$env:OPENAI_API_KEY="your-key"   # Windows
+rag-debugger analyze trace.json
 ```
 
-## How It Works
+`rag-debugger` with no subcommand still starts the HTTP API (`POST /diagnose`). `rag-debugger serve` does the same.
 
-### 1. Document Processing
+## Benchmarks
 
-When you upload documents:
-1. Files are loaded (PDF or TXT)
-2. Text is split into overlapping chunks (500 chars, 50 char overlap)
-3. Each chunk is embedded using OpenAI's `text-embedding-ada-002`
-4. Embeddings are stored in a FAISS index
+We do **not** yet have comparison numbers against public leaderboards. Those sets exist and are the right external baselines, but they are not downloaded or scored in this repo:
 
-### 2. Question Answering
+| Set | Use it for |
+|---|---|
+| RAGTruth | supported vs hallucination |
+| RAGChecker | diagnostic quality baseline |
+| RAGBench | broader domain validation |
+| RGB / CRAG | hard retrieval and conflicts |
 
-When you ask a question:
-1. Question is embedded using the same model
-2. Top-k most similar chunks are retrieved using FAISS
-3. Answer is generated using OpenAI Chat Completion with ONLY the retrieved chunks as context
-4. Answer is split into sentences
-5. Each sentence is compared with retrieved chunks using cosine similarity
-6. Sentences with similarity < threshold (0.7) are flagged as unsupported
+None of them label the full root-cause taxonomy (`retrieval_miss` vs `chunking_miss` vs planted rank). That is the paper contribution, and it is **not done**. In-repo today there is only a small planted-fault unit set, not a 500–2,000 example benchmark and not a results table.
 
-### 3. Evidence Alignment
+## What comes after v0.2
 
-The debugger:
-- Splits the answer into sentences
-- Computes semantic similarity between each sentence and each retrieved chunk
-- If similarity ≥ threshold, the chunk is considered supporting evidence
-- Sentences with no supporting chunks are flagged as "unsupported"
+Only after `analyze` is reliable on real traces:
 
-## Configuration
+1. More adapters (LlamaIndex, OpenAI, OpenInference) on this same `Trace`
+2. Repair experiments (`compare` on traces the tool re-runs)
+3. The editor view (sentence colors, click a claim, see missed evidence)
+4. The fault-injection benchmark large enough to publish
 
-You can adjust these parameters in the code:
-
-- **Chunk size**: Default 500 characters (in `app.py`)
-- **Chunk overlap**: Default 50 characters (in `app.py`)
-- **Top-k retrieval**: Default 5 chunks (in `app.py`)
-- **Similarity threshold**: Default 0.7 (in `app.py`, debugger initialization)
-- **LLM model**: Default `gpt-3.5-turbo` (in `rag/generator.py`)
-- **Embedding model**: Default `text-embedding-ada-002` (in `rag/embeddings.py`)
-
-## Limitations
-
-- **In-memory storage**: Documents are stored in memory. Restarting the server clears all data.
-- **Simple sentence splitting**: Uses regex-based sentence splitting. For production, consider using spaCy or NLTK.
-- **No caching**: Chunk embeddings are regenerated during evidence analysis (could be optimized).
-- **CPU-only**: Uses FAISS CPU version (no GPU acceleration).
-
-## Web UI
-
-A simple web interface is included in the `ui/` folder. Access it at `http://localhost:8000/ui` when the server is running.
-
-Features:
-- Drag-and-drop document upload
-- Interactive question interface
-- Visual evidence alignment
-- Highlighted unsupported sentences
-- Retrieved chunks with scores
-
-## Future Improvements
-
-- Add persistent storage (database)
-- Implement embedding caching
-- Add more sophisticated sentence splitting
-- Support more file formats
-- Add batch processing for multiple questions
-- Improve UI with better visualization
+The `/upload` and `/ask` demo is frozen. It is not the product.
 
 ## License
 
-This is a minimal implementation for debugging and educational purposes.
+MIT.

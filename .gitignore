@@ -75,3 +75,11 @@ bandit-report.json
 # FAISS indices (if saved)
 *.index
 *.faiss
+
+# Node / VS Code extension
+node_modules/
+*.vsix
+!vscode-extension/*.vsix
+
+# Downloaded benchmarks and derived traces
+Benchmark/
