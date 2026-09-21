@@ -12,11 +12,32 @@ import openai
 
 VALID_LABELS = {"supported", "partial", "unsupported"}
 
+SYSTEM_PROMPT = (
+    "You check whether a CLAIM is entailed by EVIDENCE.\n"
+    "- supported: the evidence states the claim (paraphrase is OK).\n"
+    "- partial: the evidence covers only part of the claim.\n"
+    "- unsupported: the evidence does not establish the claim, "
+    "contradicts it, or is only topically related.\n"
+    "Related topic is not enough. Return JSON only: "
+    '{"label":"supported"|"partial"|"unsupported","reason":"short"}'
+)
+
 
 @dataclass
 class JudgeResult:
     label: str
     reason: str
+
+
+def build_user_prompt(claim: str, evidence: str, question: str = "") -> str:
+    return (
+        "Question (context only):\n"
+        f"{question or '(none)'}\n\n"
+        "Claim:\n"
+        f"{claim}\n\n"
+        "Evidence:\n"
+        f"{evidence}\n"
+    )
 
 
 class SupportJudge:
@@ -35,32 +56,13 @@ class SupportJudge:
         if not evidence.strip():
             return JudgeResult(label="unsupported", reason="No evidence provided.")
 
-        prompt = (
-            "Question (context only):\n"
-            f"{question or '(none)'}\n\n"
-            "Claim:\n"
-            f"{claim}\n\n"
-            "Evidence:\n"
-            f"{evidence}\n"
-        )
         response = self.client.chat.completions.create(
             model=self.model,
             temperature=0,
             max_tokens=200,
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You check whether a CLAIM is entailed by EVIDENCE.\n"
-                        "- supported: the evidence states the claim (paraphrase is OK).\n"
-                        "- partial: the evidence covers only part of the claim.\n"
-                        "- unsupported: the evidence does not establish the claim, "
-                        "contradicts it, or is only topically related.\n"
-                        "Related topic is not enough. Return JSON only: "
-                        '{"label":"supported"|"partial"|"unsupported","reason":"short"}'
-                    ),
-                },
-                {"role": "user", "content": prompt},
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": build_user_prompt(claim, evidence, question)},
             ],
         )
         raw = (response.choices[0].message.content or "").strip()

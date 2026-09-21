@@ -2,6 +2,16 @@ import json
 from pathlib import Path
 
 from rag.datasets.ragtruth import export_split, gold_label, iter_examples, question_of, source_to_text
+from rag.judge import _parse_judge_output
+from rag.local_models import DEFAULT_EMBED_MODEL, DEFAULT_JUDGE_MODEL
+
+
+def test_local_judge_defaults_and_json_parse():
+    assert DEFAULT_JUDGE_MODEL == "Qwen/Qwen3.8-27B"
+    assert DEFAULT_EMBED_MODEL == "BAAI/bge-large-en-v1.5"
+    parsed = _parse_judge_output('{"label":"supported","reason":"paraphrase"}')
+    assert parsed.label == "supported"
+    assert parsed.reason == "paraphrase"
 
 
 def test_gold_and_question_mapping():

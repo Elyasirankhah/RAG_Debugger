@@ -35,6 +35,7 @@ rag-debugger = "rag_debugger.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.4.0", "ruff>=0.6.0", "bandit>=1.7.9"]
+local = ["torch>=2.5", "transformers>=5.8", "sentence-transformers>=3.0", "accelerate>=1.0"]
 
 [tool.setuptools]
 py-modules = ["app", "start_server"]

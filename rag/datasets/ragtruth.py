@@ -169,6 +169,15 @@ def make_analyzer(judge_name: str) -> TraceAnalyzer:
         from rag.judge import SupportJudge
 
         return TraceAnalyzer(EmbeddingGenerator(), SupportJudge())
+    if judge_name == "local":
+        from rag.local_models import DEFAULT_EMBED_MODEL, DEFAULT_JUDGE_MODEL, LocalEmbedder, LocalSupportJudge
+
+        print(
+            f"Local judge: {os.getenv('RAG_DEBUGGER_LOCAL_JUDGE_MODEL', DEFAULT_JUDGE_MODEL)}\n"
+            f"Local embeddings: {os.getenv('RAG_DEBUGGER_LOCAL_EMBED_MODEL', DEFAULT_EMBED_MODEL)}",
+            flush=True,
+        )
+        return TraceAnalyzer(LocalEmbedder(), LocalSupportJudge())
     return TraceAnalyzer(OverlapEmbedder(), OverlapJudge())
 
 
@@ -176,9 +185,12 @@ def score_examples(examples: List[dict], analyzer: TraceAnalyzer, judge_name: st
     tp = fp = fn = tn = 0
     by_task: Dict[str, Dict[str, int]] = {}
     rows = []
-    for example in examples:
+    total = len(examples)
+    for index, example in enumerate(examples, start=1):
         gold = example["gold"]
         pred = predict_response(example, analyzer)
+        if judge_name == "local":
+            print(f"[{index}/{total}] gold={gold} pred={pred}", flush=True)
         task = example["trace"]["metadata"].get("task_type") or "unknown"
         bucket = by_task.setdefault(task, {"tp": 0, "fp": 0, "fn": 0, "tn": 0})
         if gold == "hallucination" and pred == "hallucination":
@@ -224,7 +236,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--split", default="test")
     parser.add_argument("--limit", type=int, default=50)
-    parser.add_argument("--judge", choices=("overlap", "llm"), default="overlap")
+    parser.add_argument("--judge", choices=("overlap", "llm", "local"), default="overlap")
     parser.add_argument("--skip-export", action="store_true")
     args = parser.parse_args(argv)
 
