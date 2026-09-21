@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from rag.datasets.ragtruth import export_split, gold_label, iter_examples, question_of, source_to_text
+from rag.datasets.ragtruth import export_split, gold_label, iter_examples, question_of, score_examples, source_to_text
 from rag.judge import _parse_judge_output
 from rag.local_models import DEFAULT_EMBED_MODEL, DEFAULT_JUDGE_MODEL
 
@@ -77,3 +77,29 @@ def test_export_joins_response_to_source(tmp_path: Path):
     assert example["trace"]["question"] == "butcher shop phone number"
     assert example["trace"]["retrieved_chunks"][0]["text"].startswith("Phone Number")
     assert example["trace"]["metadata"]["gold"] == "hallucination"
+
+
+def test_score_checkpoint_resumes(tmp_path: Path, monkeypatch):
+    called = []
+
+    def fake_predict(example, analyzer):
+        called.append(example["trace"]["metadata"]["response_id"])
+        return "supported"
+
+    monkeypatch.setattr("rag.datasets.ragtruth.predict_response", fake_predict)
+    examples = [
+        {"gold": "hallucination", "trace": {"metadata": {"response_id": 1, "task_type": "QA"}}},
+        {"gold": "supported", "trace": {"metadata": {"response_id": 2, "task_type": "QA"}}},
+    ]
+    checkpoint = tmp_path / "partial.jsonl"
+    summary = tmp_path / "summary.json"
+    checkpoint.write_text(
+        json.dumps({"response_id": 1, "gold": "hallucination", "pred": "hallucination", "task_type": "QA"}) + "\n",
+        encoding="utf-8",
+    )
+    report = score_examples(examples, analyzer=None, judge_name="local", checkpoint_path=checkpoint, summary_path=summary)
+    assert called == [2]
+    assert report["n"] == 2
+    assert report["complete"] is True
+    assert len(checkpoint.read_text(encoding="utf-8").splitlines()) == 2
+    assert json.loads(summary.read_text(encoding="utf-8"))["n"] == 2

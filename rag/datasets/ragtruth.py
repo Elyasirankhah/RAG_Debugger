@@ -181,17 +181,31 @@ def make_analyzer(judge_name: str) -> TraceAnalyzer:
     return TraceAnalyzer(OverlapEmbedder(), OverlapJudge())
 
 
-def score_examples(examples: List[dict], analyzer: TraceAnalyzer, judge_name: str = "overlap") -> Dict[str, Any]:
+def _response_id(example: dict) -> Any:
+    return example["trace"]["metadata"].get("response_id")
+
+
+def _load_checkpoint(path: Path) -> Dict[Any, dict]:
+    saved: Dict[Any, dict] = {}
+    if not path.exists():
+        return saved
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            saved[row.get("response_id")] = row
+    return saved
+
+
+def _tally(rows: List[dict]) -> Dict[str, Any]:
     tp = fp = fn = tn = 0
     by_task: Dict[str, Dict[str, int]] = {}
-    rows = []
-    total = len(examples)
-    for index, example in enumerate(examples, start=1):
-        gold = example["gold"]
-        pred = predict_response(example, analyzer)
-        if judge_name == "local":
-            print(f"[{index}/{total}] gold={gold} pred={pred}", flush=True)
-        task = example["trace"]["metadata"].get("task_type") or "unknown"
+    for row in rows:
+        gold = row["gold"]
+        pred = row["pred"]
+        task = row.get("task_type") or "unknown"
         bucket = by_task.setdefault(task, {"tp": 0, "fp": 0, "fn": 0, "tn": 0})
         if gold == "hallucination" and pred == "hallucination":
             tp += 1
@@ -205,15 +219,65 @@ def score_examples(examples: List[dict], analyzer: TraceAnalyzer, judge_name: st
         else:
             tn += 1
             bucket["tn"] += 1
-        rows.append({"response_id": example["trace"]["metadata"].get("response_id"), "gold": gold, "pred": pred, "task_type": task})
+    n = len(rows)
     return {
-        "judge": judge_name,
-        "n": len(examples),
+        "n": n,
         "hallucination": _prf(tp, fp, fn),
-        "accuracy": round((tp + tn) / len(examples), 4) if examples else 0.0,
+        "accuracy": round((tp + tn) / n, 4) if n else 0.0,
         "by_task": {name: _prf(v["tp"], v["fp"], v["fn"]) for name, v in by_task.items()},
-        "rows": rows,
     }
+
+
+def _write_summary(path: Path, payload: Dict[str, Any]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
+def score_examples(
+    examples: List[dict],
+    analyzer: TraceAnalyzer,
+    judge_name: str = "overlap",
+    checkpoint_path: Optional[Path] = None,
+    summary_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    saved = _load_checkpoint(checkpoint_path) if checkpoint_path else {}
+    rows: List[dict] = []
+    pending: List[dict] = []
+    for example in examples:
+        response_id = _response_id(example)
+        if response_id in saved:
+            rows.append(saved[response_id])
+        else:
+            pending.append(example)
+    if saved:
+        print(f"Resuming: {len(rows)} already saved, {len(pending)} left", flush=True)
+
+    total = len(examples)
+    handle = checkpoint_path.open("a", encoding="utf-8") if checkpoint_path else None
+    try:
+        for offset, example in enumerate(pending, start=len(rows) + 1):
+            gold = example["gold"]
+            pred = predict_response(example, analyzer)
+            task = example["trace"]["metadata"].get("task_type") or "unknown"
+            row = {"response_id": _response_id(example), "gold": gold, "pred": pred, "task_type": task}
+            rows.append(row)
+            if judge_name == "local":
+                print(f"[{offset}/{total}] gold={gold} pred={pred}", flush=True)
+            if handle is not None:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            if summary_path is not None:
+                _write_summary(summary_path, {"judge": judge_name, "complete": False, **_tally(rows)})
+    finally:
+        if handle is not None:
+            handle.close()
+
+    report = {"judge": judge_name, "complete": len(rows) == total, **_tally(rows), "rows": rows}
+    if summary_path is not None:
+        _write_summary(summary_path, {k: v for k, v in report.items() if k != "rows"})
+    return report
 
 
 def _prf(tp: int, fp: int, fn: int) -> Dict[str, float]:
@@ -254,10 +318,18 @@ def main(argv: Optional[List[str]] = None) -> None:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     analyzer = make_analyzer(args.judge)
-    report = score_examples(sample, analyzer, judge_name=args.judge)
-    report["export"] = counts if isinstance(counts, dict) and "path" in counts else {"path": str(export_path), **counts}
     report_path = args.out / f"slice{args.limit}_{args.judge}.json"
-    report_path.write_text(json.dumps({k: v for k, v in report.items() if k != "rows"}, indent=2), encoding="utf-8")
+    checkpoint_path = args.out / f"slice{args.limit}_{args.judge}_partial.jsonl"
+    report = score_examples(
+        sample,
+        analyzer,
+        judge_name=args.judge,
+        checkpoint_path=checkpoint_path,
+        summary_path=report_path,
+    )
+    report["export"] = counts if isinstance(counts, dict) and "path" in counts else {"path": str(export_path), **counts}
+    report["checkpoint"] = str(checkpoint_path)
+    _write_summary(report_path, {k: v for k, v in report.items() if k != "rows"})
     print(json.dumps({k: v for k, v in report.items() if k != "rows"}, indent=2))
 
 
