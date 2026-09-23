@@ -60,6 +60,15 @@ def test_repair_improves_supported_pct_when_gold_is_in_corpus():
     assert result["delta_supported_pct"] == 100
 
 
+def test_expanded_planted_set_covers_each_family():
+    from rag.benchmark import RETRIEVAL_MISS, build_expanded_cases
+
+    cases = build_expanded_cases()
+    assert len(cases) == 48
+    causes = {case["true_cause"] for case in cases}
+    assert causes == {"supported", "hallucination", "chunking_miss", RETRIEVAL_MISS}
+
+
 def test_fault_injection_benchmark_recovers_planted_causes():
     analyzer = TraceAnalyzer(RankEmbedder(), FakeJudge())
     # Use the cases whose labels FakeJudge + RankEmbedder can actually recover.
