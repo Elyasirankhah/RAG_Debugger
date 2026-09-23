@@ -104,3 +104,18 @@ def evaluate_analyzer(analyzer: TraceAnalyzer, cases: List[Dict[str, Any]] = Non
         "accuracy": round(correct / len(cases), 3) if cases else 0.0,
         "cases": rows,
     }
+
+
+def main() -> None:
+    import json
+    import os
+
+    from rag.datasets.ragtruth import make_analyzer
+
+    judge = os.getenv("RAG_DEBUGGER_BENCH_JUDGE", "local")
+    report = evaluate_analyzer(make_analyzer(judge))
+    print(json.dumps(report, indent=2))
+
+
+if __name__ == "__main__":
+    main()
